@@ -1,70 +1,136 @@
 import os
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
-from db import init_db, Counter, db
+import json
+import sqlite3
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
 
-app = Flask(__name__)
-CORS(app)
-
-# ======================
-# 首页 (Home)
-# ======================
-@app.route("/", methods=["GET"])
-def home():
-    return send_from_directory(".", "index.html")
+DB_NAME = "counter.db"
 
 
 # ======================
-# 更新计数
+# Database init
 # ======================
-@app.route("/api/count", methods=["POST"])
-def update_count():
-    data = request.get_json()
-    action = data.get("action")
-
-    if action == "inc":
-        counter = Counter()
-        db.session.add(counter)
-        db.session.commit()
-
-    elif action == "clear":
-        db.session.query(Counter).delete()
-        db.session.commit()
-
-    count = Counter.query.count()
-
-    return jsonify({
-        "code": 0,
-        "data": count
-    })
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS counter (
+            id INTEGER PRIMARY KEY AUTOINCREMENT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
-# ======================
-# 获取计数
-# ======================
-@app.route("/api/count", methods=["GET"])
 def get_count():
-    count = Counter.query.count()
-    return jsonify({
-        "code": 0,
-        "data": count
-    })
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM counter")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 
 # ======================
-# 小程序获取微信 OpenID
+# HTTP Handler
 # ======================
-@app.route("/api/wx_openid", methods=["GET"])
-def get_wx_openid():
-    if request.headers.get("x-wx-source"):
-        return request.headers.get("x-wx-openid", "")
-    return ""
+class RequestHandler(BaseHTTPRequestHandler):
+
+    def _set_headers(self, status=200, content_type="application/json"):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    # ======================
+    # GET
+    # ======================
+    def do_GET(self):
+        parsed_path = urlparse(self.path)
+
+        # 首页
+        if parsed_path.path == "/":
+            try:
+                with open("index.html", "rb") as f:
+                    self._set_headers(200, "text/html")
+                    self.wfile.write(f.read())
+            except FileNotFoundError:
+                self._set_headers(404)
+                self.wfile.write(b"index.html not found")
+
+        # 获取计数
+        elif parsed_path.path == "/api/count":
+            count = get_count()
+            self._set_headers()
+            self.wfile.write(json.dumps({
+                "code": 0,
+                "data": count
+            }).encode())
+
+        # 获取微信 OpenID
+        elif parsed_path.path == "/api/wx_openid":
+            wx_source = self.headers.get("x-wx-source")
+            wx_openid = self.headers.get("x-wx-openid", "")
+            self._set_headers(200, "text/plain")
+            if wx_source:
+                self.wfile.write(wx_openid.encode())
+            else:
+                self.wfile.write(b"")
+
+        else:
+            self._set_headers(404)
+            self.wfile.write(b"Not Found")
+
+    # ======================
+    # POST
+    # ======================
+    def do_POST(self):
+        parsed_path = urlparse(self.path)
+
+        if parsed_path.path == "/api/count":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            data = json.loads(body.decode())
+
+            action = data.get("action")
+
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+
+            if action == "inc":
+                cursor.execute("INSERT INTO counter DEFAULT VALUES")
+            elif action == "clear":
+                cursor.execute("DELETE FROM counter")
+
+            conn.commit()
+            conn.close()
+
+            count = get_count()
+            self._set_headers()
+            self.wfile.write(json.dumps({
+                "code": 0,
+                "data": count
+            }).encode())
+
+        else:
+            self._set_headers(404)
+            self.wfile.write(b"Not Found")
 
 
 # ======================
-# 启动服务
+# Run Server
 # ======================
 if __name__ == "__main__":
-    init_db(app)
+    init_db()
     port = int(os.environ.get("PORT", 80))
-    app.run(host="0.0.0.0", port=port)
+    server = HTTPServer(("0.0.0.0", port), RequestHandler)
+    print(f"Server running on port {port}")
+    server.serve_forever()
