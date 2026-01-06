@@ -1,61 +1,70 @@
-const path = require("path");
-const express = require("express");
-const cors = require("cors");
-const morgan = require("morgan");
-const { init: initDB, Counter } = require("./db");
+import os
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from db import init_db, Counter, db
 
-const logger = morgan("tiny");
+app = Flask(__name__)
+CORS(app)
 
-const app = express();
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
-app.use(cors());
-app.use(logger);
+# ======================
+# 首页 (Home)
+# ======================
+@app.route("/", methods=["GET"])
+def home():
+    return send_from_directory(".", "index.html")
 
-// 首页
-app.get("/", async (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
 
-// 更新计数
-app.post("/api/count", async (req, res) => {
-  const { action } = req.body;
-  if (action === "inc") {
-    await Counter.create();
-  } else if (action === "clear") {
-    await Counter.destroy({
-      truncate: true,
-    });
-  }
-  res.send({
-    code: 0,
-    data: await Counter.count(),
-  });
-});
+# ======================
+# 更新计数
+# ======================
+@app.route("/api/count", methods=["POST"])
+def update_count():
+    data = request.get_json()
+    action = data.get("action")
 
-// 获取计数
-app.get("/api/count", async (req, res) => {
-  const result = await Counter.count();
-  res.send({
-    code: 0,
-    data: result,
-  });
-});
+    if action == "inc":
+        counter = Counter()
+        db.session.add(counter)
+        db.session.commit()
 
-// 小程序调用，获取微信 Open ID
-app.get("/api/wx_openid", async (req, res) => {
-  if (req.headers["x-wx-source"]) {
-    res.send(req.headers["x-wx-openid"]);
-  }
-});
+    elif action == "clear":
+        db.session.query(Counter).delete()
+        db.session.commit()
 
-const port = process.env.PORT || 80;
+    count = Counter.query.count()
 
-async function bootstrap() {
-  await initDB();
-  app.listen(port, () => {
-    console.log("启动成功", port);
-  });
-}
+    return jsonify({
+        "code": 0,
+        "data": count
+    })
 
-bootstrap();
+
+# ======================
+# 获取计数
+# ======================
+@app.route("/api/count", methods=["GET"])
+def get_count():
+    count = Counter.query.count()
+    return jsonify({
+        "code": 0,
+        "data": count
+    })
+
+
+# ======================
+# 小程序获取微信 OpenID
+# ======================
+@app.route("/api/wx_openid", methods=["GET"])
+def get_wx_openid():
+    if request.headers.get("x-wx-source"):
+        return request.headers.get("x-wx-openid", "")
+    return ""
+
+
+# ======================
+# 启动服务
+# ======================
+if __name__ == "__main__":
+    init_db(app)
+    port = int(os.environ.get("PORT", 80))
+    app.run(host="0.0.0.0", port=port)
