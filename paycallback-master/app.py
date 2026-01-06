@@ -1,29 +1,35 @@
 import streamlit as st
-import os
-import json
 import sqlite3
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse
+import json
+from pathlib import Path
+
+# Konfigurasi halaman
+st.set_page_config(
+    page_title="Counter App",
+    page_icon="🔢",
+    layout="centered"
+)
 
 DB_NAME = "counter.db"
 
-
 # ======================
-# Database init
+# Database Functions
 # ======================
 def init_db():
+    """Inisialisasi database"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS counter (
-            id INTEGER PRIMARY KEY AUTOINCREMENT
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
     conn.close()
 
-
 def get_count():
+    """Ambil jumlah count dari database"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM counter")
@@ -31,107 +37,86 @@ def get_count():
     conn.close()
     return count
 
+def increment_count():
+    """Tambah 1 ke counter"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO counter DEFAULT VALUES")
+    conn.commit()
+    conn.close()
+
+def clear_count():
+    """Reset counter ke 0"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM counter")
+    conn.commit()
+    conn.close()
 
 # ======================
-# HTTP Handler
+# Streamlit UI
 # ======================
-class RequestHandler(BaseHTTPRequestHandler):
-
-    def _set_headers(self, status=200, content_type="application/json"):
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
-    # ======================
-    # GET
-    # ======================
-    def do_GET(self):
-        parsed_path = urlparse(self.path)
-
-        # 首页
-        if parsed_path.path == "/":
-            try:
-                with open("index.html", "rb") as f:
-                    self._set_headers(200, "text/html")
-                    self.wfile.write(f.read())
-            except FileNotFoundError:
-                self._set_headers(404)
-                self.wfile.write(b"index.html not found")
-
-        # 获取计数
-        elif parsed_path.path == "/api/count":
-            count = get_count()
-            self._set_headers()
-            self.wfile.write(json.dumps({
-                "code": 0,
-                "data": count
-            }).encode())
-
-        # 获取微信 OpenID
-        elif parsed_path.path == "/api/wx_openid":
-            wx_source = self.headers.get("x-wx-source")
-            wx_openid = self.headers.get("x-wx-openid", "")
-            self._set_headers(200, "text/plain")
-            if wx_source:
-                self.wfile.write(wx_openid.encode())
-            else:
-                self.wfile.write(b"")
-
-        else:
-            self._set_headers(404)
-            self.wfile.write(b"Not Found")
-
-    # ======================
-    # POST
-    # ======================
-    def do_POST(self):
-        parsed_path = urlparse(self.path)
-
-        if parsed_path.path == "/api/count":
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length)
-            data = json.loads(body.decode())
-
-            action = data.get("action")
-
-            conn = sqlite3.connect(DB_NAME)
-            cursor = conn.cursor()
-
-            if action == "inc":
-                cursor.execute("INSERT INTO counter DEFAULT VALUES")
-            elif action == "clear":
-                cursor.execute("DELETE FROM counter")
-
-            conn.commit()
-            conn.close()
-
-            count = get_count()
-            self._set_headers()
-            self.wfile.write(json.dumps({
-                "code": 0,
-                "data": count
-            }).encode())
-
-        else:
-            self._set_headers(404)
-            self.wfile.write(b"Not Found")
-
-
-# ======================
-# Run Server
-# ======================
-if __name__ == "__main__":
+def main():
+    # Inisialisasi database
     init_db()
-    port = int(os.environ.get("PORT", 80))
-    server = HTTPServer(("0.0.0.0", port), RequestHandler)
-    print(f"Server running on port {port}")
-    server.serve_forever()
+    
+    # Header
+    st.title("🔢 Counter App")
+    st.markdown("---")
+    
+    # Ambil count saat ini
+    current_count = get_count()
+    
+    # Display counter dengan style
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 30px; background-color: #f0f2f6; border-radius: 10px;'>
+            <h1 style='font-size: 72px; margin: 0; color: #1f77b4;'>{current_count}</h1>
+            <p style='font-size: 18px; color: #666; margin: 10px 0 0 0;'>Total Count</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Tombol kontrol
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("➕ Increment", use_container_width=True, type="primary"):
+            increment_count()
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.rerun()
+    
+    with col3:
+        if st.button("🗑️ Clear", use_container_width=True, type="secondary"):
+            clear_count()
+            st.rerun()
+    
+    # Info tambahan
+    st.markdown("---")
+    with st.expander("ℹ️ Informasi"):
+        st.markdown("""
+        **Cara Penggunaan:**
+        - **Increment**: Tambah counter +1
+        - **Refresh**: Perbarui tampilan counter
+        - **Clear**: Reset counter ke 0
+        
+        Data disimpan di SQLite database lokal.
+        """)
+    
+    # Footer
+    st.markdown("---")
+    st.caption("Counter App • Powered by Streamlit")
+
+# ======================
+# API Endpoints (Optional)
+# ======================
+# Jika ingin menambahkan API endpoints, gunakan st.experimental_get_query_params()
+# dan st.experimental_set_query_params() untuk routing sederhana
+
+if __name__ == "__main__":
+    main()
